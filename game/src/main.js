@@ -16,6 +16,7 @@ const KILL_REWARD = 300;
 const ROUND_WIN_REWARD = 2000;
 const BOT_DAMAGE_PER_SHOT = 12;
 const PLAYER_MAX_HEALTH = 100;
+const WEAPON_COSTS = { pistol: 0, rifle: 2700, shotgun: 1200, smg: 1800 };
 
 const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
@@ -95,7 +96,6 @@ hud.onPlay(() => {
     hud.hideOverlay();
     input.requestLock();
   } else {
-    // Between rounds: open buy menu or start next round
     openBuyMenu();
   }
 });
@@ -109,7 +109,6 @@ function startRound() {
   elapsed = 0;
   bots.reset();
   weapon.refill();
-  // Reset player position to spawn point
   body.position.set(0, 0, 18);
   body.velocity.set(0, 0, 0);
   body.yaw = 0;
@@ -139,29 +138,30 @@ function endRound(won) {
 
 function openBuyMenu() {
   inBuyPhase = true;
-  hud.showBuyMenu(
-    weapon.getEquipped(),
-    money,
-    () => {
-      inBuyPhase = false;
-      hud.hideBuyMenu();
-      startRound();
-      input.requestLock();
-    },
-    (key) => {
-      const cost = WEAPON_COSTS[key];
-      if (money >= cost && !weapon.getEquipped()[key]) {
-        money -= cost;
-        weapon.purchase(key);
-        hud.setMoney(money);
-        hud.showBuyMenu(weapon.getEquipped(), money, arguments[0], arguments[1]); // refresh
-      }
+  const equipped = weapon.getEquipped();
+  
+  function doClose() {
+    inBuyPhase = false;
+    hud.hideBuyMenu();
+    startRound();
+    input.requestLock();
+  }
+  
+  function doBuy(key) {
+    const cost = WEAPON_COSTS[key];
+    if (money >= cost && !equipped[key]) {
+      money -= cost;
+      weapon.purchase(key);
+      weapon.switchTo(key);
+      hud.setMoney(money);
+      hud.setWeapon(key);
+      // Refresh with updated state
+      openBuyMenu();
     }
-  );
+  }
+  
+  hud.showBuyMenu(equipped, money, doClose, doBuy);
 }
-
-// Weapon costs mapping (needed here for buy logic)
-const WEAPON_COSTS = { pistol: 0, rifle: 2700, shotgun: 1200, smg: 1800 };
 
 // ---- Shooting logic ----
 function shootPlayerBullet() {
@@ -176,8 +176,8 @@ function shootPlayerBullet() {
   raycaster.set(camera.position, direction);
 
   const pellets = weapon.getPellets();
+  let hitAnything = false;
   for (let p = 0; p < pellets; p++) {
-    // Slight additional spread per pellet for shotgun
     if (pellets > 1) {
       raycaster.ray.direction.x += (random() * 2 - 1) * 0.02;
       raycaster.ray.direction.y += (random() * 2 - 1) * 0.02;
@@ -186,32 +186,34 @@ function shootPlayerBullet() {
     }
     const hit = raycaster.intersectObjects(shootables, false)[0];
     if (hit) {
-      // Check if hit a bot
-      const botIdx = bots.meshes.indexOf(hit.object);
-      if (botIdx !== -1) {
-        // Determine headshot (if hit object has userData.part === 'head')
-        const isHead = hit.object.userData.part === 'head';
-        const dmg = isHead ? 100 : weapon.getDamage();
-        // Find which bot this mesh belongs to
-        for (let i = 0; i < bots.count(); i++) {
-          if (bots.meshes[i] === hit.object || bots.meshes[i + bots.count()] === hit.object) {
-            bots.damage(i, dmg);
-            if (bots.count() > 0 && bots.aliveCount() > 0) {
-              money += KILL_REWARD;
-              roundKills++;
-              score++;
-              hud.setScore(score);
-              hud.setMoney(money);
-              hud.hitMarker(true, 90);
-              hud.addKillFeed(`You eliminated Bot ${i+1} (${isHead ? 'HEADSHOT' : ''}) +$${KILL_REWARD}`);
-            }
-            break;
+      hitAnything = true;
+      const isHead = hit.object.userData.part === 'head';
+      // Find which bot owns this mesh
+      for (let i = 0; i < bots.count(); i++) {
+        if (bots.meshes[i] === hit.object || bots.meshes[i + bots.count()] === hit.object) {
+          const prevAlive = bots.aliveCount();
+          const dmg = isHead ? 100 : weapon.getDamage();
+          bots.damage(i, dmg);
+          const nowAlive = bots.aliveCount();
+          if (prevAlive > nowAlive) {
+            // Bot actually died
+            money += KILL_REWARD;
+            roundKills++;
+            score++;
+            hud.setScore(score);
+            hud.setMoney(money);
+            hud.hitMarker(true, 90);
+            hud.addKillFeed(`You eliminated Bot ${i+1} (${isHead ? 'HEADSHOT' : ''}) +$${KILL_REWARD}`);
+          } else {
+            hud.hitMarker(false, 90);
           }
+          break;
         }
-      } else {
-        hud.hitMarker(false, 90);
       }
     }
+  }
+  if (!hitAnything) {
+    hud.hitMarker(false, 90);
   }
   weapon.pullTrigger();
   player.recoil(0.009 + random() * 0.004, (random() * 2 - 1) * 0.004);
@@ -222,18 +224,16 @@ function processBotShots() {
   const shots = bots.takeShots();
   const playerPos = body.position.clone().add(new THREE.Vector3(0, body.eye, 0));
   const playerBox = new THREE.Box3();
-  const r = 0.3; // player radius approx
+  const r = 0.3;
   playerBox.min.set(playerPos.x - r, playerPos.y - 0.6, playerPos.z - r);
   playerBox.max.set(playerPos.x + r, playerPos.y + 0.2, playerPos.z + r);
 
   shots.forEach(sh => {
-    // Add some inaccuracy to bot shots
     sh.direction.x += (random() * 2 - 1) * 0.04;
     sh.direction.y += (random() * 2 - 1) * 0.03;
     sh.direction.z += (random() * 2 - 1) * 0.04;
     sh.direction.normalize();
     const ray = new THREE.Raycaster(sh.from, sh.direction, 0, 80);
-    // Simple sphere intersection with player bounding box
     const closest = new THREE.Vector3();
     ray.ray.closestPointToPoint(closest);
     if (playerBox.containsPoint(closest) && ray.ray.at(ray.ray.distanceToPoint(closest)).distanceTo(closest) < 0.5) {
@@ -241,7 +241,7 @@ function processBotShots() {
       hud.addKillFeed(`Bot shot you (-${BOT_DAMAGE_PER_SHOT} HP)`);
       if (health <= 0) {
         health = 0;
-        endRound(false); // Player died
+        endRound(false);
       }
     }
   });
@@ -251,7 +251,6 @@ function processBotShots() {
 function step(dt) {
   elapsed += dt;
   if (elapsed >= roundTime) {
-    // Time's up: round ends, whoever has more alive wins (or draw)
     const botsAlive = bots.aliveCount();
     endRound(botsAlive === 0);
     return;
@@ -260,7 +259,6 @@ function step(dt) {
   weapon.step(dt);
   bots.step(dt, body.position, elapsed);
   processBotShots();
-  // Check if all bots dead
   if (bots.aliveCount() === 0 && roundActive) {
     endRound(true);
   }
@@ -275,12 +273,10 @@ function frame(now) {
     player.look(look.x, look.y);
     if (input.state.firing && weapon.ready()) shootPlayerBullet();
     if (input.state.keys.has('KeyR')) weapon.reload();
-    // Weapon switching via number keys
     if (input.state.keys.has('Digit1')) weapon.switchTo('pistol');
     if (input.state.keys.has('Digit2')) weapon.switchTo('rifle');
     if (input.state.keys.has('Digit3')) weapon.switchTo('shotgun');
     if (input.state.keys.has('Digit4')) weapon.switchTo('smg');
-    // Buy menu toggle
     if (input.state.keys.has('KeyB') && !roundActive && !inBuyPhase) {
       openBuyMenu();
     }
@@ -293,7 +289,6 @@ function frame(now) {
     }
     if (accumulator > FIXED_STEP * 5) accumulator = 0;
     syncCamera();
-    // Update HUD timers
     hud.setTimer(Math.max(0, roundTime - elapsed));
     hud.setWeapon(weapon.getCurrentKey());
   }
@@ -325,7 +320,6 @@ function onLockChange(locked) {
     started = true;
     hud.hideOverlay();
     if (!roundActive && !inBuyPhase) {
-      // If we just unlocked after a round ended, go to buy phase
       openBuyMenu();
     }
   } else {
@@ -343,7 +337,6 @@ function runShot(name) {
   if (name === 'play' || name === 'end') {
     body.position.set(0, 0, 16);
     settle(20);
-    // Aim at first bot and fire a few shots
     for (let i = 0; i < Math.min(2, bots.count()); i++) {
       const bp = bots.meshes[i].position;
       aimAt(new THREE.Vector3(bp.x, bp.y + 1, bp.z));
@@ -352,7 +345,6 @@ function runShot(name) {
     }
     if (name === 'play') {
       settle(12);
-      // Show weapon model clearly
       aimAt(new THREE.Vector3(0, 1.5, -6));
       shootPlayerBullet();
       settle(1);
@@ -360,7 +352,6 @@ function runShot(name) {
       settle(40);
     }
   } else {
-    // Start screen: show overlay
     body.position.set(0.6, 0, 18.6);
     settle(20);
     aimAt(new THREE.Vector3(0, 1.5, -6));
@@ -394,9 +385,17 @@ window.addEventListener('resize', () => {
 
 syncCamera();
 if (shot) {
-  runShot(shot);
+  try {
+    runShot(shot);
+  } catch (e) {
+    console.error('runShot failed:', e);
+    // Still render something so screenshot isn't blank
+    syncCamera();
+    renderer.render(scene, camera);
+    window.__shotReady = true;
+    frozen = true;
+  }
 } else {
-  // Initial start overlay
   hud.showOverlay('start', 0);
   requestAnimationFrame(frame);
 }
