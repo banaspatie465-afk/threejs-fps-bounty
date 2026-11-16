@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Greybox Range: a three.js FPS starter</title>
+<title>Tactical FPS — three.js</title>
 <style>
   /* Look plan: canvas, surface, hairline, ink, muted and one accent. Every colour below is one of the six. */
   :root {
@@ -30,6 +30,7 @@
   #game, #game canvas { position: fixed; inset: 0; display: block; }
   #hud { position: fixed; inset: 0; pointer-events: none; }
 
+  /* Crosshair */
   #crosshair { position: fixed; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); }
   #crosshair i { position: absolute; background: var(--ink); opacity: .85; }
   #crosshair i:nth-child(1) { left: 10px; top: 0; width: 2px; height: 7px; }
@@ -37,6 +38,7 @@
   #crosshair i:nth-child(3) { top: 10px; left: 0; height: 2px; width: 7px; }
   #crosshair i:nth-child(4) { top: 10px; right: 0; height: 2px; width: 7px; }
 
+  /* Hitmarker */
   #hitmarker { position: fixed; left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%, -50%) rotate(45deg); opacity: 0; transition: opacity 90ms linear; }
   #hitmarker.on { opacity: 1; }
   #hitmarker i { position: absolute; background: var(--accent); }
@@ -45,10 +47,46 @@
   #hitmarker i:nth-child(3) { top: 12px; left: 0; height: 2px; width: 8px; }
   #hitmarker i:nth-child(4) { top: 12px; right: 0; height: 2px; width: 8px; }
 
-  #ammo {
+  /* Top bar: round timer + team scores */
+  #topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 24px;
+    font-family: var(--font-readout);
+    font-size: 14px;
+    color: var(--muted);
+    background: linear-gradient(to bottom, rgba(20,22,26,0.85) 0%, transparent 100%);
+  }
+  #timer { font-size: 22px; color: var(--ink); letter-spacing: -0.02em; }
+  #teams { display: flex; gap: 24px; align-items: center; }
+  .team-score { display: flex; align-items: baseline; gap: 6px; }
+  .team-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .team-val { font-size: 22px; font-weight: 500; }
+  .team.ct .team-label { color: #4a9eff; }
+  .team.t .team-label { color: var(--accent); }
+
+  /* Ammo + weapon name (bottom right) */
+  #ammo-area {
     position: fixed;
     right: 32px;
     bottom: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+  #weapon-name {
+    font-family: var(--font-readout);
+    font-size: 13px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  #ammo {
     display: flex;
     align-items: baseline;
     gap: 8px;
@@ -61,16 +99,44 @@
   #ammo.empty #ammo-mag { color: var(--accent); }
   #ammo-reserve { font-size: 16px; letter-spacing: -0.01em; color: var(--muted); }
 
-  #score {
+  /* Bottom left: score + money */
+  #status-area {
     position: fixed;
     left: 32px;
     bottom: 24px;
     font-family: var(--font-readout);
     font-size: 14px;
     color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
-  #score b { color: var(--ink); font-weight: 500; }
+  #status-area b { color: var(--ink); font-weight: 500; }
+  #money-line { color: #6fcf6f; }
 
+  /* Kill feed (top-right, small) */
+  #killfeed {
+    position: fixed;
+    top: 48px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--font-readout);
+    font-size: 12px;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .kill-entry {
+    padding: 4px 10px;
+    background: var(--surface);
+    border-radius: var(--radius-panel);
+    opacity: 0.9;
+    animation: fadeOut 5s forwards;
+  }
+  @keyframes fadeOut { from { opacity: 0.9; } to { opacity: 0; } }
+
+  /* Overlay panels */
   .overlay {
     position: fixed;
     inset: 0;
@@ -81,7 +147,7 @@
   }
   .overlay[hidden] { display: none; }
   .panel {
-    width: min(420px, 100%);
+    width: min(460px, 100%);
     padding: 32px;
     background: var(--surface);
     border: 1px solid var(--hairline);
@@ -118,6 +184,44 @@
   #play:hover { background: var(--ink); border-color: var(--ink); }
   #play:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+  /* Buy menu */
+  #buy-overlay {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--canvas) 90%, transparent);
+    z-index: 10;
+  }
+  #buy-overlay[hidden] { display: none; }
+  .buy-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .buy-item {
+    padding: 16px;
+    background: var(--hairline);
+    border: 1px solid transparent;
+    border-radius: var(--radius-panel);
+    cursor: pointer;
+    transition: border-color 120ms ease;
+  }
+  .buy-item:hover { border-color: var(--accent); }
+  .buy-item.owned { opacity: 0.5; pointer-events: none; }
+  .buy-item h3 { margin: 0 0 4px; font-size: 16px; font-weight: 500; }
+  .buy-item .price { font-family: var(--font-readout); font-size: 13px; color: #6fcf6f; }
+  #buy-close {
+    font: inherit;
+    padding: 8px 16px;
+    background: transparent;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
   .keys {
     margin: 24px 0 0;
     padding: 0;
@@ -150,14 +254,29 @@
 <div id="hud" aria-hidden="true">
   <div id="crosshair"><i></i><i></i><i></i><i></i></div>
   <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
-  <div id="ammo"><span id="ammo-mag">30</span><span id="ammo-reserve">/ 90</span></div>
-  <div id="score">Score <b id="score-value">0</b></div>
+  <div id="topbar">
+    <div id="teams">
+      <div class="team ct"><span class="team-label">CT</span> <span class="team-val" id="ct-score">0</span></div>
+      <div class="team t"><span class="team-label">T</span> <span class="team-val" id="t-score">0</span></div>
+    </div>
+    <div id="timer">1:45</div>
+  </div>
+  <div id="ammo-area">
+    <div id="weapon-name">Pistol</div>
+    <div id="ammo"><span id="ammo-mag">12</span><span id="ammo-reserve">/ 48</span></div>
+  </div>
+  <div id="status-area">
+    <div>Kills <b id="score-value">0</b></div>
+    <div id="money-line">$<b id="money-value">800</b></div>
+  </div>
+  <div id="killfeed"></div>
 </div>
 
+<!-- Start / Pause / End overlay -->
 <div id="overlay" class="overlay">
   <section class="panel" role="dialog" aria-modal="true" aria-labelledby="overlay-title">
-    <h1 id="overlay-title">Greybox Range</h1>
-    <p id="overlay-copy">A plain room, one rifle and four targets. Click to play.</p>
+    <h1 id="overlay-title">Tactical FPS</h1>
+    <p id="overlay-copy">Eliminate all enemies or survive the round. Buy better gear between rounds.</p>
     <button id="play" type="button">Click to play</button>
     <ul class="keys">
       <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move</li>
@@ -166,7 +285,19 @@
       <li><kbd>R</kbd> Reload</li>
       <li><kbd>Ctrl</kbd> Crouch</li>
       <li><kbd>Space</kbd> Jump</li>
+      <li><kbd>B</kbd> Buy Menu (between rounds)</li>
+      <li><kbd>1</kbd>-<kbd>4</kbd> Switch weapon</li>
     </ul>
+  </section>
+</div>
+
+<!-- Buy menu overlay -->
+<div id="buy-overlay" hidden>
+  <section class="panel">
+    <h1>Buy Menu</h1>
+    <p>Money: $<span id="buy-money">800</span></p>
+    <div class="buy-grid" id="buy-grid"></div>
+    <button id="buy-close" type="button">Close</button>
   </section>
 </div>
 
